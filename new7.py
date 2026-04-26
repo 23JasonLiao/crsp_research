@@ -239,25 +239,37 @@ if uploaded_files:
             
             factor_df = calculate_asset_management_factors(df_f)
             
-            # 表格格式化顯示
+            # --- 修改後的表格格式化顯示 ---
             display_df = factor_df.copy()
-            for col in ['年化報酬率', '年化波動度', 'Max Drawdown']:
+            
+            # 1. 處理百分比欄位 (報酬、波動、MDD)
+            pct_cols = ['年化報酬率', '年化波動度', 'Max Drawdown']
+            for col in pct_cols:
                 display_df[col] = display_df[col].map('{:.2%}'.format)
+            
+            # 2. 處理數值欄位 (Sharpe, Sortino, Skewness, Kurtosis) 
+            # 確保保留兩到四位小數，方便對比
+            num_cols = ['Sharpe Ratio', 'Sortino Ratio', '偏度 (Skewness)', '峰度 (Kurtosis)']
+            for col in num_cols:
+                display_df[col] = display_df[col].map('{:.4f}'.format)
+                
+            # 3. 顯示表格 (VaR 95% 在函數中已經是字串格式，故不需額外處理)
             st.dataframe(display_df, use_container_width=True)
             
-            # 風險收益效率前緣圖
+            # --- 風險收益效率前緣圖 (維持不變) ---
             st.subheader("風險-報酬效率前緣圖")
-            # 修正 Plotly Size 負值問題
             factor_df['BubbleSize'] = factor_df['Sharpe Ratio'].apply(lambda x: max(x, 0) + 0.05)
             
             fig_risk = px.scatter(
                 factor_df, x="年化波動度", y="年化報酬率", size="BubbleSize", color="管理公司",
-                hover_data=["Sharpe Ratio", "Sortino Ratio", "Max Drawdown"],
+                # 這裡也可以多增加 hover 資訊
+                hover_data=["Sharpe Ratio", "Sortino Ratio", "Max Drawdown", "偏度 (Skewness)", "VaR 95% (月度)"],
                 title="氣泡大小代表 Sharpe Ratio (越高性能越好)"
             )
             fig_risk.update_layout(xaxis_tickformat='.1%', yaxis_tickformat='.1%')
             st.plotly_chart(fig_risk, use_container_width=True)
             
+            # --- 下方歷史回撤圖維持不變 ---
             st.divider()
             st.subheader("📉 歷史回撤趨勢圖 (Underwater Chart)")
             st.info("💡 此圖顯示基金從歷史高點跌落的幅度，跌得越深代表抗風險能力越弱。")
