@@ -428,90 +428,141 @@ if uploaded_files:
          """)
           
           
-        with tab4:
-             st.header("🔍 自定義交叉探索沙盒")
-             st.markdown("您可以自由選擇座標軸，系統將自動計算不同維度間的關聯性。")
-
-             # --- 第一層：配置選項 ---
-             col1, col2, col3 = st.columns(3)
+          with tab4:
+               st.header("🔍 自定義交叉探索沙盒：動態邊界分析")
     
-             with col1:
-                # 讓使用者選 X 軸 (通常是類別或時間)
-                x_axis = st.selectbox("選擇橫軸 (X-axis)", 
-                                    options=['caldt', '市場環境', 'seniority_label', 'mgmt_name', '股債配置比'],
-                                    index=1) # 預設選市場環境
+               # --- 第零層：動態邊界定義 ---
+               st.subheader("⚙️ 定義研究邊界")
+               exp_col1, exp_col2, exp_col3 = st.columns(3)
+     
+               with exp_col1:
+                  senior_threshold = st.slider("資深經理人年資門檻 (年)", 1.0, 20.0, 10.0, 0.5)
         
-             with col2:
-                # 讓使用者選 Y 軸 (通常是數值)
-                y_metrics = {
-                    '月報酬率': 'mret',
-                    '資產規模 (MTNA)': 'mtna',
-                    '淨資金流 (Flow)': 'net_flow',
-                    '費用率': 'exp_ratio',
-                    '基金數量': 'fund_name' # 特別處理：用於 count
-                } 
-                y_axis_label = st.selectbox("選擇縱軸 (Y-axis)", options=list(y_metrics.keys()), index=0)
-                y_axis = y_metrics[y_axis_label]
-
-             with col3:
-                  # 讓使用者選分類顏色 (Legend)
-                  color_by = st.selectbox("分組顏色 (Color)", 
-                                         options=['seniority_label', '市場環境', '股債配置比'],
-                                         index=0)
-
-             # --- 第二層：數據聚合處理 ---
-             # 根據使用者的選擇動態處理資料
-             df_sandbox = df_f.copy()
+               with exp_col2:
+                 # 新增：回報門檻拉桿，回應老師「負一點點算低迷嗎」的質疑
+                  ret_cutoff = st.slider("市場低迷判定門檻 (月報酬 %)", -5.0, 2.0, 0.0, 0.1) / 100
+               with exp_col3:
+                  vol_adjustment = st.slider("市場波動判定偏移 (±%)", -50, 50, 0, 5) / 100
+      
+              # 使用副本進行處理，避免影響原始數據
+               df_sandbox = df_f.copy()
     
-             # 如果 X 軸是時間，我們按年轉換，否則直接分組
-             if x_axis == 'caldt':
-                 df_sandbox['年份'] = df_sandbox['caldt'].dt.year
-                 group_col = '年份'
-             else:
-                 group_col = x_axis
-
-             # 執行聚合運算
-             if y_axis == 'fund_name':
-                 # 如果選的是基金數量，執行 count
-                 chart_data = df_sandbox.groupby([group_col, color_by])['crsp_fundno'].nunique().reset_index()
-                 chart_data.columns = [group_col, color_by, '基金數量']
-                 y_final = '基金數量'
-             else:
-                 # 如果是其他數值，執行 mean (平均值)
-                 chart_data = df_sandbox.groupby([group_col, color_by])[y_axis].mean().reset_index()
-                 y_final = y_axis
-
-             # --- 第三層：自動化繪圖 ---
-             # 這裡加入聯動邏輯：如果 X 是類別用 Bar，X 是時間用 Line 或 Scatter
-             if x_axis == 'caldt':
-                fig_sandbox = px.line(chart_data, x=group_col, y=y_final, color=color_by,
-                                    markers=True, title=f"時間趨勢分析：{y_axis_label}")
-             else:
-                fig_sandbox = px.bar(chart_data, x=group_col, y=y_final, color=color_by,
-                                   barmode='group', title=f"各維度對比分析：{y_axis_label}")
-
-             # 優化圖表佈局
-             fig_sandbox.update_layout(height=500)
-             st.plotly_chart(fig_sandbox, use_container_width=True)
-
-             # --- 第四層：底層相關性矩陣 (自動跑出來的東西) ---
-             st.divider()
-             st.subheader("💡 系統自動偵測：因子相關性矩陣")
-             st.write("選取當前篩選數據中的核心數值因子，自動計算其相關係數：")
+              # 1. 動態年資計算
+               df_sandbox['seniority_label'] = df_sandbox['tenure'].apply(
+                   lambda x: f'資深 ({senior_threshold}Y+)' if x >= senior_threshold else '一般資歷'
+               )
     
-             # 自動抓取數值欄位
-             numeric_cols = df_f.select_dtypes(include=[np.number]).columns.tolist()
-             # 過濾掉一些不適合算相關性的 ID 欄位
-             clean_num_cols = [c for c in numeric_cols if c not in ['crsp_fundno', 'tenure']]
+              # 2. 動態市場環境計算
+               market_stats = df_sandbox.groupby('caldt')['mret'].agg(['mean', 'std']).reset_index()
+               dynamic_vol_limit = market_stats['std'].median() * (1 + vol_adjustment)
     
-             if len(clean_num_cols) > 1:
-                 corr = df_f[clean_num_cols].corr()
-                 fig_corr = px.imshow(corr, text_auto=".2f", aspect="auto",
-                                    color_continuous_scale='RdBu_r', origin='lower',
-                                    title="因子相關性熱圖 (Correlation Heatmap)")
-                 st.plotly_chart(fig_corr, use_container_width=True)
-             else:
-                 st.info("數值因子不足，無法計算相關性。")
+               def dynamic_label(row):
+               # 使用拉桿設定的 ret_cutoff 取代硬碼的 0
+                   if row['mean'] < ret_cutoff: return "市場低迷 (雙殺)"
+                   if row['std'] > dynamic_vol_limit: return "股票動能強 (高波)"
+                   return "債券/穩健強 (低波)"
+    
+               market_stats['市場環境'] = market_stats.apply(dynamic_label, axis=1)
+               if '市場環境' in df_sandbox.columns:
+                  df_sandbox = df_sandbox.drop(columns=['市場環境'])
+                  df_sandbox = df_sandbox.merge(market_stats[['caldt', '市場環境']], on='caldt')
+
+               # 3. 股債配置比計算
+               def get_alloc_label(row):
+                   lipp = str(row.get('lipper_class_name', '')).upper()
+                   if 'GROWTH' in lipp or '70% TO 90%' in lipp: return "80:20 (激進)"
+                   if 'MODERATE' in lipp or '50% TO 70%' in lipp: return "60:40 (平衡)"
+                   if 'CONSERVATIVE' in lipp or '30% TO 50%' in lipp: return "40:60 (保守)"
+                   return "60:40 (標準)"
+               df_sandbox['股債配置比'] = df_sandbox.apply(get_alloc_label, axis=1)
+
+       
+
+               # --- 第二層：雙軸交叉分析 ---
+               st.divider()
+               st.subheader("📊 雙軸交互統計")
+               c1, c2, c3 = st.columns(3)
+               with c1:
+                 # 橫軸：加入來自熱圖的分類維度
+                 # 移除 lipper_obj_cd 與 crsp_style 相關
+                 x_opts = [
+                    '年份', '市場環境', 'seniority_label', 'mgmt_name', '股債配置比', 
+                    'crsp_obj_cd', 'lipper_class_name', 'dead_flag', 'index_fund_flag'
+                ]
+                 x_axis = st.selectbox("選擇橫軸 (分類維度)", options=x_opts, index=1) 
+               with c2:
+                  # 縱軸：從熱圖中抓取關鍵量化指標
+                   y_metrics = {
+                      '平均月報酬': 'mret',
+                      '平均資產規模 (MTNA)': 'mtna',
+                      '平均淨資金流 (Net Flow)': 'net_flow',
+                      '總費用率 (Exp Ratio)': 'exp_ratio',
+                      '管理費 (Mgmt Fee)': 'mgmt_fee',
+                      '換手率 (Turnover)': 'turn_ratio',
+                      '12b1 費用': 'actual_12b1',
+                      '基金年齡 (Age)': 'age',
+                      '基金數量 (Count)': 'fund_name'
+                   }
+                   y_sel = st.selectbox("選擇縱軸 (量化指標)", options=list(y_metrics.keys()), index=0)
+                   y_col = y_metrics[y_sel]
+               
+               with c3:
+                   # 分組：提供具備金融研究意義的標籤
+                   color_opts = ['seniority_label', '市場環境', '股債配置比', 'index_fund_flag']
+                   color_col = st.selectbox("分組顏色 (Legend)", options=color_opts, index=0)
+
+              # 數據處理邏輯
+               if x_axis == '年份':
+                   df_sandbox['yr'] = df_sandbox['caldt'].dt.year
+                   grp_x = 'yr'
+               else:
+                   grp_x = x_axis
+
+               if y_col == 'fund_name':
+                   chart_df = df_sandbox.groupby([grp_x, color_col])['crsp_fundno'].nunique().reset_index()
+                   chart_df.columns = [grp_x, color_col, 'Count']
+                   y_plot = 'Count'
+               else:
+                   chart_df = df_sandbox.groupby([grp_x, color_col])[y_col].mean().reset_index()
+                   y_plot = y_col
+
+            # 繪圖
+               if grp_x == 'yr':
+                  fig_custom = px.line(chart_df, x=grp_x, y=y_plot, color=color_col, markers=True, title=f"隨時間演進之{y_sel}")
+               else:
+                  fig_custom = px.bar(chart_df, x=grp_x, y=y_plot, color=color_col, barmode='group', title=f"不同{grp_x}之{y_sel}")
+    
+                  st.plotly_chart(fig_custom, use_container_width=True)
+        
+               # --- 第三層：專家觀測與結論 ---
+               st.info(f"""
+                **💡 金融推論：**
+                1. 當前低迷門檻設為 **{ret_cutoff:.2%}**，代表全市場平均月報酬低於此值即判定為「雙殺」環境。
+                2. 您可以觀察 X 軸切換為 **『費用率』** 或 **『規模』** 時，資深經理人的分佈是否具備規模優勢。
+                """)
+                
+            
+                
+              # --- 第三層：邊界敏感度分析 (核心學術回應) ---
+               st.divider()
+               st.subheader("🧪 邊界敏感度與相關性分析")
+    
+               m1, m2 = st.columns(2)
+               senior_val = df_sandbox[df_sandbox['tenure'] >= senior_threshold]['mret'].mean()
+               # 臨界區間定在門檻上下 0.5 年
+               fringe_mask = (df_sandbox['tenure'] >= senior_threshold - 0.5) & (df_sandbox['tenure'] <= senior_threshold + 0.5)
+               fringe_val = df_sandbox[fringe_mask]['mret'].mean()
+    
+               m1.metric("資深組平均月回報", f"{senior_val:.2%}")
+               m2.metric("臨界區間 (±0.5Y) 回報", f"{fringe_val:.2%}")
+
+              # 自動相關性矩陣
+               num_df = df_sandbox.select_dtypes(include=[np.number])
+               valid_cols = [c for c in num_df.columns if c not in ['crsp_fundno', 'tenure', 'yr']]
+               if len(valid_cols) > 1:
+                  corr_matrix = num_df[valid_cols].corr()
+                  fig_corr = px.imshow(corr_matrix, text_auto=".2f", color_continuous_scale='RdBu_r', aspect="auto")
+                  st.plotly_chart(fig_corr, use_container_width=True)
 
         with tab5:
             st.header("原始數據明細")
