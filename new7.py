@@ -231,7 +231,7 @@ if uploaded_files:
             df_f = df_f[df_f['mgmt_name'].isin(selected_mgmt)]
 
         # --- 6. 分頁介面 ---
-        tab1, tab2, tab3, tab4 = st.tabs(["💼 專業資產管理因子", "📈 年資與股債環境適應性", "📊 資金流行為與資產動態生態分析", "📋 原始數據"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["💼 專業資產管理因子", "📈 年資與股債環境適應性", "📊 資金流行為與資產動態生態分析", "🔍 自定義交叉探索", "📋 原始數據"])
 
         with tab1:
             st.header("資產管理核心指標 (MPT & Risk Factors)")
@@ -426,8 +426,94 @@ if uploaded_files:
             1. **Performance-Flow Abnormality**：檢視報酬是否為資金流的領先指標。
             2. **Investor Trust**：資深經理人通常擁有更高的「品牌溢價」，這在 Net Flow 的穩定性上可以得到體現。
          """)
-
+          
+          
         with tab4:
+             st.header("🔍 自定義交叉探索沙盒")
+             st.markdown("您可以自由選擇座標軸，系統將自動計算不同維度間的關聯性。")
+
+             # --- 第一層：配置選項 ---
+             col1, col2, col3 = st.columns(3)
+    
+             with col1:
+                # 讓使用者選 X 軸 (通常是類別或時間)
+                x_axis = st.selectbox("選擇橫軸 (X-axis)", 
+                                    options=['caldt', '市場環境', 'seniority_label', 'mgmt_name', '股債配置比'],
+                                    index=1) # 預設選市場環境
+        
+             with col2:
+                # 讓使用者選 Y 軸 (通常是數值)
+                y_metrics = {
+                    '月報酬率': 'mret',
+                    '資產規模 (MTNA)': 'mtna',
+                    '淨資金流 (Flow)': 'net_flow',
+                    '費用率': 'exp_ratio',
+                    '基金數量': 'fund_name' # 特別處理：用於 count
+                } 
+                y_axis_label = st.selectbox("選擇縱軸 (Y-axis)", options=list(y_metrics.keys()), index=0)
+                y_axis = y_metrics[y_axis_label]
+
+             with col3:
+                  # 讓使用者選分類顏色 (Legend)
+                  color_by = st.selectbox("分組顏色 (Color)", 
+                                         options=['seniority_label', '市場環境', '股債配置比'],
+                                         index=0)
+
+             # --- 第二層：數據聚合處理 ---
+             # 根據使用者的選擇動態處理資料
+             df_sandbox = df_f.copy()
+    
+             # 如果 X 軸是時間，我們按年轉換，否則直接分組
+             if x_axis == 'caldt':
+                 df_sandbox['年份'] = df_sandbox['caldt'].dt.year
+                 group_col = '年份'
+             else:
+                 group_col = x_axis
+
+             # 執行聚合運算
+             if y_axis == 'fund_name':
+                 # 如果選的是基金數量，執行 count
+                 chart_data = df_sandbox.groupby([group_col, color_by])['crsp_fundno'].nunique().reset_index()
+                 chart_data.columns = [group_col, color_by, '基金數量']
+                 y_final = '基金數量'
+             else:
+                 # 如果是其他數值，執行 mean (平均值)
+                 chart_data = df_sandbox.groupby([group_col, color_by])[y_axis].mean().reset_index()
+                 y_final = y_axis
+
+             # --- 第三層：自動化繪圖 ---
+             # 這裡加入聯動邏輯：如果 X 是類別用 Bar，X 是時間用 Line 或 Scatter
+             if x_axis == 'caldt':
+                fig_sandbox = px.line(chart_data, x=group_col, y=y_final, color=color_by,
+                                    markers=True, title=f"時間趨勢分析：{y_axis_label}")
+             else:
+                fig_sandbox = px.bar(chart_data, x=group_col, y=y_final, color=color_by,
+                                   barmode='group', title=f"各維度對比分析：{y_axis_label}")
+
+             # 優化圖表佈局
+             fig_sandbox.update_layout(height=500)
+             st.plotly_chart(fig_sandbox, use_container_width=True)
+
+             # --- 第四層：底層相關性矩陣 (自動跑出來的東西) ---
+             st.divider()
+             st.subheader("💡 系統自動偵測：因子相關性矩陣")
+             st.write("選取當前篩選數據中的核心數值因子，自動計算其相關係數：")
+    
+             # 自動抓取數值欄位
+             numeric_cols = df_f.select_dtypes(include=[np.number]).columns.tolist()
+             # 過濾掉一些不適合算相關性的 ID 欄位
+             clean_num_cols = [c for c in numeric_cols if c not in ['crsp_fundno', 'tenure']]
+    
+             if len(clean_num_cols) > 1:
+                 corr = df_f[clean_num_cols].corr()
+                 fig_corr = px.imshow(corr, text_auto=".2f", aspect="auto",
+                                    color_continuous_scale='RdBu_r', origin='lower',
+                                    title="因子相關性熱圖 (Correlation Heatmap)")
+                 st.plotly_chart(fig_corr, use_container_width=True)
+             else:
+                 st.info("數值因子不足，無法計算相關性。")
+
+        with tab5:
             st.header("原始數據明細")
             st.dataframe(df_f.head(1000), use_container_width=True)
             st.download_button("📥 下載完整過濾後數據", df_f.to_csv(index=False), "balanced_full_analysis.csv")
