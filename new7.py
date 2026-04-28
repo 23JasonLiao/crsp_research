@@ -478,61 +478,66 @@ if uploaded_files:
 
        
 
-               # --- 第二層：雙軸交叉分析 ---
+               # --- 第一層：雙軸交叉分析 ---
                st.divider()
                st.subheader("📊 雙軸交互統計")
+               st.markdown("此圖表呈現原始數據點位，不進行聚合，以便觀察數據的分佈規律。")
                c1, c2, c3 = st.columns(3)
                with c1:
                  # 橫軸：加入來自熱圖的分類維度
                  # 移除 lipper_obj_cd 與 crsp_style 相關
-                 x_opts = [
-                    '年份', '市場環境', 'seniority_label', 'mgmt_name', '股債配置比', 
-                    'crsp_obj_cd', 'lipper_class_name', 'dead_flag', 'index_fund_flag'
-                ]
-                 x_axis = st.selectbox("選擇橫軸 (分類維度)", options=x_opts, index=1) 
+                   x_opts = ['caldt', '年份', '市場環境', 'seniority_label', 'mgmt_name', '股債配置比', 'index_fund_flag', 'dead_flag']
+                   x_axis = st.selectbox("選擇橫軸 (X-axis)", options=x_opts, index=0)
+    
                with c2:
                   # 縱軸：從熱圖中抓取關鍵量化指標
-                   y_metrics = {
-                      '平均月報酬': 'mret',
-                      '平均資產規模 (MTNA)': 'mtna',
-                      '平均淨資金流 (Net Flow)': 'net_flow',
-                      '總費用率 (Exp Ratio)': 'exp_ratio',
-                      '管理費 (Mgmt Fee)': 'mgmt_fee',
-                      '換手率 (Turnover)': 'turn_ratio',
-                      '12b1 費用': 'actual_12b1',
-                      '基金年齡 (Age)': 'age',
-                      '基金數量 (Count)': 'fund_name'
+                   y_metrics_raw = {
+                      '月報酬率': 'mret',
+                       '資產規模 (MTNA)': 'mtna',
+                       '淨資金流 (Net Flow)': 'net_flow',
+                       '費用率 (Exp Ratio)': 'exp_ratio',
+                       '管理費 (Mgmt Fee)': 'mgmt_fee',
+                       '換手率 (Turnover)': 'turn_ratio',
+                       '基金年齡 (Age)': 'age'
                    }
-                   y_sel = st.selectbox("選擇縱軸 (量化指標)", options=list(y_metrics.keys()), index=0)
-                   y_col = y_metrics[y_sel]
+                   y_sel = st.selectbox("選擇縱軸 (Y-axis)", options=list(y_metrics_raw.keys()), index=0)
+                   y_col = y_metrics_raw[y_sel]
                
                with c3:
                    # 分組：提供具備金融研究意義的標籤
                    color_opts = ['seniority_label', '市場環境', '股債配置比', 'index_fund_flag']
-                   color_col = st.selectbox("分組顏色 (Legend)", options=color_opts, index=0)
-
-              # 數據處理邏輯
+                   color_col = st.selectbox("選擇分組顏色 (Legend)", options=color_opts, index=1)
+              # 數據預處理
                if x_axis == '年份':
-                   df_sandbox['yr'] = df_sandbox['caldt'].dt.year
-                   grp_x = 'yr'
+                   df_sandbox['yr_tmp'] = df_sandbox['caldt'].dt.year
+                   final_x = 'yr_tmp'
                else:
-                   grp_x = x_axis
+                   final_x = x_axis
 
-               if y_col == 'fund_name':
-                   chart_df = df_sandbox.groupby([grp_x, color_col])['crsp_fundno'].nunique().reset_index()
-                   chart_df.columns = [grp_x, color_col, 'Count']
-                   y_plot = 'Count'
-               else:
-                   chart_df = df_sandbox.groupby([grp_x, color_col])[y_col].mean().reset_index()
-                   y_plot = y_col
+               # 繪製點位散佈圖 (Scatter)
+               fig_raw = px.scatter(
+                   df_sandbox,
+                   x=final_x,
+                   y=y_col,
+                   color=color_col,
+                   opacity=0.5,
+                   marginal_y="violin", # 在側邊增加小提琴圖，顯示分佈密度
+                   title=f"原始數據分佈：{x_axis} vs {y_sel}",
+                   labels={y_col: y_sel, final_x: x_axis},
+                   hover_data=['fund_name', 'mgmt_name']
+               )
 
-            # 繪圖
-               if grp_x == 'yr':
-                  fig_custom = px.line(chart_df, x=grp_x, y=y_plot, color=color_col, markers=True, title=f"隨時間演進之{y_sel}")
-               else:
-                  fig_custom = px.bar(chart_df, x=grp_x, y=y_plot, color=color_col, barmode='group', title=f"不同{grp_x}之{y_sel}")
-    
-                  st.plotly_chart(fig_custom, use_container_width=True)
+              # 效能與視覺優化：只對 Scatter 類型套用 WebGL
+               for trace in fig_raw.data:
+                   # 檢查是否為散佈圖層 (Scatter 或 Scattergl)
+                   if hasattr(trace, 'render_mode'):
+                       trace.render_mode = 'webgl'
+                   
+                   # 如果是 Scatter 類型，縮小標記大小
+                   if 'marker' in trace and hasattr(trace.marker, 'size'):
+                       trace.marker.size = 4
+               
+               st.plotly_chart(fig_raw, use_container_width=True)
         
                # --- 第三層：專家觀測與結論 ---
                st.info(f"""
