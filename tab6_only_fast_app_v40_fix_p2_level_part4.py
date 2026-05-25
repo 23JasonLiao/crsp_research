@@ -50,7 +50,6 @@ def load_and_combine_data(uploaded_files):
 
     df = pd.concat(df_list, ignore_index=True, copy=False)
 
-    # 基礎欄位轉型
     for c in ['caldt', 'mgr_dt', 'first_offer_dt', 'flow_report_dt', 'trans_dt']:
         if c in df.columns:
             df[c] = pd.to_datetime(df[c], errors='coerce')
@@ -68,7 +67,6 @@ def load_and_combine_data(uploaded_files):
     if 'mgr_name' not in df.columns:
         df['mgr_name'] = 'Unknown Manager'
 
-    # Flow：老師要求分析過去 flow，因此直接建立 net_flow
     if {'new_sls', 'redemp'}.issubset(df.columns):
         rein = df['rein_sls'] if 'rein_sls' in df.columns else 0
         oth = df['oth_sls'] if 'oth_sls' in df.columns else 0
@@ -81,12 +79,10 @@ def load_and_combine_data(uploaded_files):
     elif 'net_flow' not in df.columns:
         df['net_flow'] = np.nan
 
-    # 管理年資
     df['tenure'] = ((df['caldt'] - df['mgr_dt']).dt.days / 365.25).astype('float32')
     df['tenure'] = df['tenure'].clip(lower=0)
     df['seniority_label'] = (df['tenure'] >= 10).map({True: '資深 (10年以上)', False: '一般資歷'}).astype('category')
 
-    # 降低重複文字欄位記憶體用量；Plotly / groupby 仍可正常使用。
     for c in ['mgmt_name', 'mgr_name', 'fund_name', 'lipper_class_name', 'policy']:
         if c in df.columns:
             df[c] = df[c].astype('category')
@@ -144,7 +140,6 @@ def safe_compound_return(s):
     log_sum = float(np.log1p(r.astype(float)).sum())
     if not np.isfinite(log_sum):
         return np.nan
-    # Avoid overflow in expm1; values above ~700 exceed float64 practical range.
     if log_sum > 700:
         return np.nan
     if log_sum < -700:
@@ -245,10 +240,6 @@ def safe_kurtosis(s):
 
 
 
-# Part 4 radar configuration.
-# Important: a radar chart has only one radial scale. Therefore the radius is kept as
-# a 0~1 percentile score for comparability, while each axis displays the financial
-# metric name/unit and hover text shows the original physical value.
 RADAR_METRIC_CONFIG = [
     {'label': '報酬率', 'score_col': '雷達_報酬率', 'raw_col': '年化報酬率', 'higher_is_better': True, 'unit_type': 'pct', 'unit_label': '%'},
     {'label': '超額報酬率', 'score_col': '雷達_超額報酬率', 'raw_col': '平均超額月報酬', 'higher_is_better': True, 'unit_type': 'pct', 'unit_label': '%'},
@@ -266,31 +257,6 @@ RADAR_LABELS = [m['label'] for m in RADAR_METRIC_CONFIG]
 RADAR_THETA_LABELS = [f"{m['label']}<br>({m['unit_label']})" for m in RADAR_METRIC_CONFIG]
 
 
-def format_radar_raw_value(value, unit_type):
-    """Format the original physical metric shown in Part 4 radar hover/table."""
-    if pd.isna(value):
-        return 'NA'
-    try:
-        v = float(value)
-    except Exception:
-        return str(value)
-    if unit_type == 'pct':
-        return f'{v:.2%}'
-    if unit_type == 'years':
-        return f'{v:.2f} 年'
-    if unit_type == 'money':
-        return f'{v:,.2f}'
-    return f'{v:.4g}'
-
-
-def format_pct_columns(df, cols):
-    out = df.copy()
-    for c in cols:
-        if c in out.columns:
-            out[c] = out[c].map(lambda x: '' if pd.isna(x) else f'{x:.2%}')
-    return out
-
-
 @st.cache_resource(show_spinner=False)
 def build_tab6_return_sp500_scatter_data(df, sp500_df=None, manual_sp500_ann=0.10):
     """
@@ -302,7 +268,6 @@ def build_tab6_return_sp500_scatter_data(df, sp500_df=None, manual_sp500_ann=0.1
     if df is None or df.empty:
         return pd.DataFrame(), "無基金資料"
 
-    # Memory-safe: only keep columns needed for Part 1 scatter, instead of copying the full CRSP table.
     scatter_needed_cols = [
         'caldt', 'mret', 'mgmt_name', 'mgr_name', 'crsp_fundno', 'fund_name',
         'net_flow', 'mtna', 'exp_ratio', 'tenure', 'turn_ratio'
@@ -312,7 +277,6 @@ def build_tab6_return_sp500_scatter_data(df, sp500_df=None, manual_sp500_ann=0.1
     out['caldt'] = pd.to_datetime(out['caldt'], errors='coerce')
     out = out.dropna(subset=['caldt', 'mret', 'mgmt_name'])
 
-    # 用月份做 benchmark 對齊，避免月末日期格式不同造成 merge 失敗。
     out['month_key'] = out['caldt'].dt.to_period('M').astype(str)
 
     benchmark_source = "手動年化 S&P500 轉換為固定月報酬"
@@ -327,11 +291,9 @@ def build_tab6_return_sp500_scatter_data(df, sp500_df=None, manual_sp500_ann=0.1
     else:
         out['sp500_ret'] = (1 + manual_sp500_ann) ** (1 / 12) - 1
 
-    # 若有些月份 benchmark 缺值，用手動 benchmark 補上，避免整張圖空白。
     manual_monthly = (1 + manual_sp500_ann) ** (1 / 12) - 1
     out['sp500_ret'] = pd.to_numeric(out['sp500_ret'], errors='coerce').fillna(manual_monthly)
 
-    # 連續色彩可以選擇的衍生欄位
     out['基金超額月報酬'] = out['mret'] - out['sp500_ret']
     out['基金絕對報酬'] = out['mret'].abs()
     out['S&P500絕對報酬'] = out['sp500_ret'].abs()
@@ -341,7 +303,6 @@ def build_tab6_return_sp500_scatter_data(df, sp500_df=None, manual_sp500_ann=0.1
         out['net_flow'] = np.nan
         out['Flow絕對值'] = np.nan
 
-    # 確保常用 hover / color 欄位存在
     for c in ['fund_name', 'crsp_fundno', 'mgr_name', 'mtna', 'exp_ratio', 'tenure', 'turn_ratio']:
         if c not in out.columns:
             out[c] = np.nan
@@ -366,7 +327,6 @@ def build_tab6_part2_feature_tables(selected_scatter_df):
         if c in d.columns:
             d[c] = pd.to_numeric(d[c], errors='coerce')
 
-    # Part 2A：每一個「基金-月份」觀測值可直接看的特徵
     monthly = pd.DataFrame(index=d.index)
     monthly['__tab6_row_id'] = d.get('tab6_row_id', pd.Series(d.index, index=d.index))
     monthly['基金家族'] = d.get('mgmt_name')
@@ -386,17 +346,13 @@ def build_tab6_part2_feature_tables(selected_scatter_df):
     monthly['觀測年份'] = pd.to_datetime(d.get('caldt'), errors='coerce').dt.year
     monthly = monthly.replace([np.inf, -np.inf], np.nan)
 
-    # Part 2B：以每檔基金在目前框選樣本中的月份資料計算因子
     rows = []
-    group_cols = ['crsp_fundno']
     if 'crsp_fundno' not in d.columns:
         return monthly, pd.DataFrame()
 
     for fund_id, g in d.groupby('crsp_fundno'):
         g = g.sort_values('caldt') if 'caldt' in g.columns else g.copy()
         r = pd.to_numeric(g['mret'], errors='coerce').dropna()
-        b = pd.to_numeric(g['sp500_ret'], errors='coerce').reindex(r.index).dropna() if 'sp500_ret' in g.columns else pd.Series(dtype=float)
-        # 對齊 benchmark
         rb = g[['mret', 'sp500_ret']].dropna() if {'mret','sp500_ret'}.issubset(g.columns) else pd.DataFrame()
         r_aligned = pd.to_numeric(rb['mret'], errors='coerce') if not rb.empty else r
         b_aligned = pd.to_numeric(rb['sp500_ret'], errors='coerce') if not rb.empty else pd.Series(dtype=float)
@@ -522,9 +478,6 @@ def build_tab6_manager_radar_base(raw_df):
     if base.empty:
         return base
 
-    # 把不同量綱轉成 0~1 的相對分數，才能放在同一張雷達圖。
-    # 注意：雷達圖半徑仍是 0~1 相對分位數，不是直接用原始物理量當半徑。
-    # 原始物理量會保留在表格中；軸名稱也標示對應單位；hover 已關閉。
     for metric in RADAR_METRIC_CONFIG:
         label = metric['label']
         col = metric['raw_col']
@@ -568,98 +521,13 @@ def make_tab6_manager_radar_record(base_df, manager_name, source_label, source_k
     }
 
 
-def render_tab6_part4_radar(records):
-    """畫出具記憶性的 Part 4 經理人特徵雷達圖。
-
-    半徑 r 使用 0~1 相對分位數，因為單一雷達圖只能有一套半徑刻度；
-    每個軸的原始物理量單位會放在軸名稱中；hover 已關閉。
-    """
-    if not records:
-        return go.Figure()
-
-    fig = go.Figure()
-    theta = RADAR_THETA_LABELS + RADAR_THETA_LABELS[:1]
-    labels = RADAR_LABELS
-
-    for rec in records:
-        values = [rec['雷達分數'].get(c, 0.5) for c in labels]
-        values = values + values[:1]
-        raw_values = []
-        raw_display = []
-        raw_dict = rec.get('原始指標', {})
-        for metric in RADAR_METRIC_CONFIG:
-            raw_val = raw_dict.get(metric['raw_col'], np.nan)
-            raw_values.append(raw_val)
-            raw_display.append(format_radar_raw_value(raw_val, metric['unit_type']))
-        raw_values = raw_values + raw_values[:1]
-        raw_display = raw_display + raw_display[:1]
-        customdata = np.array([
-            [lab, disp, metric['raw_col']]
-            for lab, disp, metric in zip(labels + labels[:1], raw_display, RADAR_METRIC_CONFIG + RADAR_METRIC_CONFIG[:1])
-        ], dtype=object)
-
-        name = f"{rec['基金經理人']} | {rec['來源']}"
-        fig.add_trace(
-            go.Scatterpolar(
-                r=values,
-                theta=theta,
-                fill='toself',
-                name=name,
-                opacity=0.65,
-                hoverinfo='skip',
-                hovertemplate=None
-            )
-        )
-    fig.update_layout(
-        title='Part 4：經理人特徵雷達圖（半徑=0~1相對分位數；軸名顯示原始物理量單位）',
-        polar=dict(
-            radialaxis=dict(
-                visible=True,
-                range=[0, 1],
-                tickformat='.0%',
-                title='相對分位數'
-            )
-        ),
-        showlegend=True,
-        height=650,
-        margin=dict(l=40, r=40, t=90, b=40)
-    )
-    return fig
-
-
-
-
-
-
-# ============================================================
-# v31：Tab6 1/3/5 年快速比較版
-# - Part5 已移除
-# - Part1 支援月 / 1 / 3 / 5 年切換
-# - Part1 支援單一選區與兩選區比較
-# - Part2 支援月資料、基金層級、基金家族層級 histogram，比較 A/B
-# - Part3 支援單一經理人構成與兩區比較經理人構成
-# - Part4 保留雷達圖記憶功能
-# ============================================================
-
-HORIZON_OPTIONS = {
-    '月資料': 1,
-    '1年': 12,
-    '3年': 36,
-    '5年': 60,
-}
-
-# v34: Part1/Part2 top controls follow the v31 frontend style shown in the screenshot.
-# Internally we still keep the original v33 key '月資料' so existing functions do not change.
 HORIZON_DISPLAY_OPTIONS = ['月', '1年', '3年', '5年']
 HORIZON_DISPLAY_TO_KEY = {'月': '月資料', '1年': '1年', '3年': '3年', '5年': '5年'}
 HORIZON_KEY_TO_DISPLAY = {v: k for k, v in HORIZON_DISPLAY_TO_KEY.items()}
 
 PLOT_COLORS = {
-    'A': 'rgba(30, 136, 229, 0.72)',
-    'B': 'rgba(255, 112, 67, 0.62)',
     'A_dark': 'rgba(13, 71, 161, 0.95)',
-    'B_dark': 'rgba(191, 54, 12, 0.92)',
-    'gray': 'rgba(150,150,150,0.12)'
+    'B_dark': 'rgba(191, 54, 12, 0.92)'
 }
 
 
@@ -687,7 +555,6 @@ def build_tab6_horizon_scatter_tables(df, sp500_df=None, manual_sp500_ann=0.10):
     base['tab6_row_id'] = np.arange(len(base), dtype=np.int64)
     base['時間色彩'] = base['caldt'].dt.year + (base['caldt'].dt.month - 1) / 12.0
 
-    # Prepare safe log returns.  Invalid gross returns are removed from horizon views.
     safe_mret = pd.to_numeric(base['mret'], errors='coerce').where(lambda x: x > -0.999999)
     safe_sp = pd.to_numeric(base['sp500_ret'], errors='coerce').where(lambda x: x > -0.999999)
     base['_log_mret'] = np.log1p(safe_mret)
@@ -701,14 +568,11 @@ def build_tab6_horizon_scatter_tables(df, sp500_df=None, manual_sp500_ann=0.10):
     monthly['基金超額月報酬'] = (monthly['y_ret'] - monthly['x_ret']).astype('float32')
     tables['月資料'] = monthly.drop(columns=['_log_mret', '_log_sp500'], errors='ignore')
 
-    # Rolling horizon annualized returns by fund. S&P500 rolling return is identical by month,
-    # but computing it inside the aligned frame is fast enough and keeps the same month grid.
     for label, window in [('1年', 12), ('3年', 36), ('5年', 60)]:
         d = base.copy(deep=False)
         g = d.groupby('crsp_fundno', sort=False, observed=True)
         roll_sum_fund = g['_log_mret'].rolling(window=window, min_periods=max(3, int(window * 0.7))).sum().reset_index(level=0, drop=True)
         roll_count_fund = g['_log_mret'].rolling(window=window, min_periods=max(3, int(window * 0.7))).count().reset_index(level=0, drop=True)
-        # Benchmark rolling by calendar month, then map back to every fund-month.
         bench_by_month = d[['month_key', '_log_sp500']].drop_duplicates('month_key').sort_values('month_key')
         bench_by_month['_sp_roll_sum'] = bench_by_month['_log_sp500'].rolling(window=window, min_periods=max(3, int(window * 0.7))).sum()
         bench_by_month['_sp_roll_count'] = bench_by_month['_log_sp500'].rolling(window=window, min_periods=max(3, int(window * 0.7))).count()
@@ -765,7 +629,6 @@ def extract_selection_bbox(event):
     """Extract a bounding box from Streamlit Plotly selection event."""
     if event is None:
         return None
-    # Try box object first.
     try:
         boxes = event.selection.box if event.selection else []
         if boxes:
@@ -780,8 +643,6 @@ def extract_selection_bbox(event):
                     return {'x0': float(min(vals_x)), 'x1': float(max(vals_x)), 'y0': float(min(vals_y)), 'y1': float(max(vals_y))}
     except Exception:
         pass
-    # Fallback: points bounding box.  This is slower when a selection includes many points,
-    # but is compatible with older Streamlit versions.
     xs, ys = [], []
     try:
         points = event.selection.points if event.selection else []
@@ -819,60 +680,6 @@ def nice_axis_range(s, q_low=0.005, q_high=0.995, pad_ratio=0.08):
     return [lo - pad, hi + pad]
 
 
-def make_part1_scatter(df, focus_dfs, period_label, boxes=None, zoom_to_dense=True):
-    """Scatter with all points in gray and selected regions highlighted."""
-    fig = go.Figure()
-    selected_ids = set()
-    for fdf in focus_dfs.values():
-        if fdf is not None and not fdf.empty and 'tab6_row_id' in fdf.columns:
-            selected_ids.update(fdf['tab6_row_id'].astype(int).tolist())
-    bg = df.loc[~df['tab6_row_id'].isin(selected_ids)] if selected_ids else df
-    fig.add_trace(go.Scattergl(
-        x=bg['x_ret'], y=bg['y_ret'], mode='markers',
-        marker=dict(color=PLOT_COLORS['gray'], size=3, line=dict(width=0)),
-        name='全部背景點', hoverinfo='skip', showlegend=True
-    ))
-    for label, fdf in focus_dfs.items():
-        if fdf is None or fdf.empty:
-            continue
-        color = PLOT_COLORS['A'] if label == 'A' else PLOT_COLORS['B']
-        fig.add_trace(go.Scattergl(
-            x=fdf['x_ret'], y=fdf['y_ret'], mode='markers',
-            marker=dict(color=fdf.get('時間色彩', None), colorscale='Viridis', size=4.5, opacity=0.86,
-                        showscale=(label == 'A'), colorbar=dict(title='年份', len=0.45, thickness=10)),
-            name=f'選區 {label}', hoverinfo='skip', showlegend=True
-        ))
-    fig.add_vline(x=0, line_dash='dash', line_color='gray')
-    fig.add_hline(y=0, line_dash='dash', line_color='gray')
-    rng_min = np.nanmin([df['x_ret'].min(), df['y_ret'].min()])
-    rng_max = np.nanmax([df['x_ret'].max(), df['y_ret'].max()])
-    fig.add_trace(go.Scatter(x=[rng_min, rng_max], y=[rng_min, rng_max], mode='lines',
-                             line=dict(dash='dot', color='black'), name='基金報酬 = S&P500', hoverinfo='skip'))
-    for name, box in (boxes or {}).items():
-        if box is None:
-            continue
-        x0, x1 = sorted([box['x0'], box['x1']])
-        y0, y1 = sorted([box['y0'], box['y1']])
-        color = 'rgba(30,136,229,1)' if name == 'A' else 'rgba(255,112,67,1)'
-        fig.add_shape(type='rect', x0=x0, x1=x1, y0=y0, y1=y1, xref='x', yref='y',
-                      line=dict(color=color, width=3), fillcolor='rgba(0,0,0,0)', layer='above')
-    x_title = 'S&P500 月報酬率' if period_label == '月資料' else f'S&P500 {period_label}年化報酬率'
-    y_title = '基金月報酬率' if period_label == '月資料' else f'基金 {period_label}年化報酬率'
-    fig.update_layout(
-        title=f'Part 1：{x_title} × {y_title}',
-        xaxis_title=x_title, yaxis_title=y_title,
-        xaxis_tickformat='.1%', yaxis_tickformat='.1%',
-        dragmode='select', hovermode=False, height=560,
-        margin=dict(l=50, r=30, t=70, b=55), uirevision=f'p1_{period_label}'
-    )
-    if zoom_to_dense:
-        xr = nice_axis_range(df['x_ret'])
-        yr = nice_axis_range(df['y_ret'])
-        if xr: fig.update_xaxes(range=xr)
-        if yr: fig.update_yaxes(range=yr)
-    return fig
-
-
 def shared_hist_edges(dataframes, col, bins=30):
     vals = []
     for d in dataframes:
@@ -891,44 +698,6 @@ def shared_hist_edges(dataframes, col, bins=30):
     return np.linspace(lo, hi, bins + 1)
 
 
-def make_hist_compare(data_a, data_b, col, title, cumulative=False):
-    fig = go.Figure()
-    edges = shared_hist_edges([data_a, data_b], col, bins=30)
-    if edges is None:
-        fig.update_layout(title=title, height=260)
-        return fig
-    centers = (edges[:-1] + edges[1:]) / 2
-    widths = np.diff(edges) * 0.92
-    for label, data, color in [('A', data_a, PLOT_COLORS['A']), ('B', data_b, PLOT_COLORS['B'])]:
-        if data is None or data.empty or col not in data.columns:
-            continue
-        x = pd.to_numeric(data[col], errors='coerce').replace([np.inf, -np.inf], np.nan).dropna()
-        counts, _ = np.histogram(x, bins=edges)
-        if cumulative:
-            counts = np.cumsum(counts)
-        fig.add_trace(go.Bar(x=centers, y=counts, width=widths, name=f'選區 {label}',
-                             marker=dict(color=color, line=dict(width=0.2)), hoverinfo='skip', opacity=0.78))
-    fig.update_layout(title=title, height=270, barmode='overlay', hovermode=False,
-                      margin=dict(l=35, r=10, t=45, b=35), xaxis_title=col,
-                      yaxis_title='累積次數' if cumulative else '次數')
-    fig.update_xaxes(showgrid=True, gridcolor='rgba(0,0,0,0.06)')
-    fig.update_yaxes(showgrid=True, gridcolor='rgba(0,0,0,0.06)')
-    return fig
-
-
-def render_hist_grid(data_a, data_b, columns, compare_mode=False, cumulative=False):
-    cols = [c for c in columns if c in data_a.columns and pd.to_numeric(data_a[c], errors='coerce').notna().sum() > 0]
-    if not cols:
-        st.warning('目前沒有可顯示的 histogram 欄位。')
-        return
-    for start in range(0, len(cols), 4):
-        ui_cols = st.columns(4)
-        for i, col in enumerate(cols[start:start+4]):
-            with ui_cols[i]:
-                fig = make_hist_compare(data_a, data_b if compare_mode else None, col, col, cumulative=cumulative)
-                st.plotly_chart(fig, width='stretch', config={'displaylogo': False})
-
-
 def make_manager_count_data(raw_df):
     if raw_df is None or raw_df.empty or 'mgr_name' not in raw_df.columns:
         return pd.DataFrame(columns=['基金經理人', '次數'])
@@ -937,34 +706,6 @@ def make_manager_count_data(raw_df):
             .rename(columns={'_manager': '基金經理人'})
             .sort_values('次數', ascending=False))
 
-
-def make_manager_bar_single(counts, title):
-    fig = go.Figure(go.Bar(x=counts['基金經理人'], y=counts['次數'], hoverinfo='skip'))
-    fig.update_layout(title=title, xaxis_title='基金經理人', yaxis_title='次數', height=520,
-                      margin=dict(l=50, r=20, t=60, b=180), hovermode=False)
-    fig.update_xaxes(tickangle=-55, automargin=True)
-    return fig
-
-
-def make_manager_bar_compare(count_a, count_b):
-    a = count_a.rename(columns={'次數': '選區A次數'})
-    b = count_b.rename(columns={'次數': '選區B次數'})
-    m = a.merge(b, on='基金經理人', how='outer').fillna(0)
-    m['總次數'] = m['選區A次數'] + m['選區B次數']
-    m = m.sort_values('總次數', ascending=False)
-    fig = go.Figure()
-    fig.add_trace(go.Bar(x=m['基金經理人'], y=m['選區A次數'], name='選區 A', marker_color=PLOT_COLORS['A_dark'], hoverinfo='skip'))
-    fig.add_trace(go.Bar(x=m['基金經理人'], y=m['選區B次數'], name='選區 B', marker_color=PLOT_COLORS['B_dark'], hoverinfo='skip'))
-    fig.update_layout(title='Part 3：兩選區經理人出現次數比較', xaxis_title='基金經理人', yaxis_title='次數',
-                      barmode='group', height=560, margin=dict(l=50, r=20, t=60, b=190), hovermode=False)
-    fig.update_xaxes(tickangle=-55, automargin=True)
-    return fig, m
-
-
-
-# ------------------------------
-# v33 helpers and Main app
-# ------------------------------
 
 def build_tab6_part2_feature_tables_v32(selected_scatter_df):
     """Part2 tables with added family-level monthly features."""
@@ -990,7 +731,7 @@ def build_tab6_part2_feature_tables_v32(selected_scatter_df):
     return monthly.replace([np.inf, -np.inf], np.nan), fund_factors
 
 
-def make_part1_scatter_v32(df, focus_dfs, period_label, boxes=None, zoom_to_dense=True):
+def make_part1_scatter_v32(df, period_label, boxes=None, zoom_to_dense=True):
     """Part1 scatter for A/B selection.
 
     v36 修正重點：設定 A 之後，不再把未選點轉成黑白/灰色。
@@ -1002,8 +743,6 @@ def make_part1_scatter_v32(df, focus_dfs, period_label, boxes=None, zoom_to_dens
     cmin = float(df['時間色彩'].min()) if '時間色彩' in df.columns else None
     cmax = float(df['時間色彩'].max()) if '時間色彩' in df.columns else None
 
-    # 永遠顯示全部 238,800 點，且維持年份色彩。
-    # 不再因為已經設定 A/B 就把背景改成灰階，避免使用者以為不能再選 B。
     fig.add_trace(go.Scattergl(
         x=df['x_ret'], y=df['y_ret'], mode='markers',
         marker=dict(
@@ -1022,7 +761,6 @@ def make_part1_scatter_v32(df, focus_dfs, period_label, boxes=None, zoom_to_dens
         showlegend=True
     ))
 
-    # 若 A/B 已設定，只用框線 + 極淡遮罩提示區域，不改變底圖點的顏色。
     for name, box in (boxes or {}).items():
         if box is None:
             continue
@@ -1235,9 +973,6 @@ def make_selectable_hist_v32(all_a, all_b, sel_a, sel_b, col, title, compare_mod
     has_sel_b = compare_mode and sel_b is not None and not sel_b.empty
     has_any_selection = direct or has_sel_a or has_sel_b
 
-    # 1) Full distribution.
-    #    No selection yet -> visible normal color.
-    #    After selection -> pale background, but not so pale that it disappears.
     if has_any_selection:
         a_bg_color = 'rgba(91, 155, 213, 0.24)'
         b_bg_color = 'rgba(255, 160, 122, 0.22)'
@@ -1255,8 +990,6 @@ def make_selectable_hist_v32(all_a, all_b, sel_a, sel_b, col, title, compare_mod
         add_bar_counts(counts_for(all_b), b_bg_name, b_bg_color, opacity=1.0,
                        line_color='rgba(255,112,67,0.72)', line_w=0.2)
 
-    # 2) Linked/current selected subset projected to every histogram.
-    #    Directly selected feature/range is dark; related charts stay light.
     if has_sel_a:
         add_bar_counts(
             counts_for(sel_a),
@@ -1276,8 +1009,6 @@ def make_selectable_hist_v32(all_a, all_b, sel_a, sel_b, col, title, compare_mod
             line_w=0.3
         )
 
-    # 3) If the latest selection is not yet converted into selected subset,
-    #    paint the exact x-overlap range on top in dark color.
     if direct and ((not has_sel_a) and (not compare_mode or not has_sel_b)):
         for reg in direct_regions or []:
             xr = reg.get('x_range')
@@ -1333,7 +1064,6 @@ def render_selectable_hist_grid_v32(data_a, data_b, raw_a, raw_b, level, columns
     regions_for_visual = []
     if latest: regions_for_visual.append(latest)
     regions_for_visual += pending + applied
-    # Selected raw for linked pale-blue movement; before apply use pending+latest so user sees immediate response.
     active_regions = pending + ([latest] if latest else []) + applied
     sel_raw_a = filter_raw_by_regions(raw_a, None, active_regions) if active_regions else pd.DataFrame(columns=raw_a.columns)
     sel_raw_b = filter_raw_by_regions(raw_b, None, active_regions) if compare_mode and active_regions else pd.DataFrame(columns=raw_b.columns if raw_b is not None else [])
@@ -1363,17 +1093,6 @@ def render_selectable_hist_grid_v32(data_a, data_b, raw_a, raw_b, level, columns
                             st.rerun()
                 else:
                     st.plotly_chart(fig, width='stretch', config={'displaylogo': False})
-
-
-def manager_colors_from_compare(count_a, count_b):
-    set_a = set(count_a['基金經理人'].astype(str)) if count_a is not None and not count_a.empty else set()
-    set_b = set(count_b['基金經理人'].astype(str)) if count_b is not None and not count_b.empty else set()
-    both = set_a & set_b
-    def color(m):
-        if m in both: return 'rgba(229,57,53,0.95)'  # red: appears in both A and B
-        if m in set_a: return PLOT_COLORS['A_dark']
-        return PLOT_COLORS['B_dark']
-    return color, both
 
 
 def make_manager_select_chart_v32(count_a, count_b=None, compare_mode=False):
@@ -1478,8 +1197,6 @@ def make_manager_select_chart_v32(count_a, count_b=None, compare_mode=False):
         col=1
     )
 
-    # Legend for the A / B / A&B color semantics. These traces are invisible points
-    # but create clear legend entries.
     if compare_mode:
         legend_items = [
             ('只屬於 A', PLOT_COLORS['A_dark']),
@@ -1565,38 +1282,6 @@ def radar_record_vector(record):
     return np.array([float(record.get('雷達分數', {}).get(k, 0.5)) for k in RADAR_LABELS], dtype=float)
 
 
-def cluster_radar_records(records, threshold=0.92):
-    """Greedy cosine-similarity grouping for radar vectors."""
-    groups = []
-    used = set()
-    vecs = [radar_record_vector(r) for r in records]
-    for i, rec in enumerate(records):
-        if i in used: continue
-        used.add(i)
-        group = [i]
-        vi = vecs[i]
-        ni = np.linalg.norm(vi)
-        for j in range(i+1, len(records)):
-            if j in used: continue
-            vj = vecs[j]
-            denom = ni * np.linalg.norm(vj)
-            sim = float(np.dot(vi, vj) / denom) if denom > 0 else 0.0
-            if sim >= threshold:
-                used.add(j)
-                group.append(j)
-        groups.append(group)
-    ordered = []
-    table = []
-    for gid, group in enumerate(groups, start=1):
-        names = []
-        for idx in group:
-            ordered.append(records[idx])
-            names.append(records[idx].get('基金經理人'))
-        table.append({'相似群組': f'Group {gid}', '經理人數': len(group), '經理人': '、'.join(map(str, names))})
-    return ordered, pd.DataFrame(table)
-
-
-
 def render_tab6_part4_radar_grouped(records):
     """Render one radar subplot per similarity group.
 
@@ -1607,7 +1292,6 @@ def render_tab6_part4_radar_grouped(records):
     if not records:
         return go.Figure(), pd.DataFrame()
 
-    # Greedy cosine grouping, deterministic by current memory order.
     vecs = [radar_record_vector(r) for r in records]
     groups = []
     used = set()
@@ -1676,7 +1360,6 @@ def render_tab6_part4_radar_grouped(records):
                 col=col
             )
 
-    # Configure every polar subplot.
     for i in range(1, n_groups + 1):
         polar_key = 'polar' if i == 1 else f'polar{i}'
         fig.layout[polar_key].radialaxis.update(visible=True, range=[0, 1], tickformat='.0%', title='相對分位數')
@@ -1690,9 +1373,6 @@ def render_tab6_part4_radar_grouped(records):
     return fig, group_table
 
 
-# ------------------------------
-# Main app
-# ------------------------------
 st.title('📌 Tab6：報酬與 S&P500 對照分析（v38：Part3 A/B 顏色分類版）')
 st.caption('此版保留 v36 的 Part1 A/B 彩色底圖；加強 Part2 histogram 顏色可讀性；兩選區模式下 Part3 以藍色/橘色/紅色分別表示只屬於 A、只屬於 B、A/B 都出現。')
 
@@ -1726,7 +1406,6 @@ all_mgmt = sorted([str(x) for x in df['mgmt_name'].dropna().unique()])
 selected_mgmt = st.sidebar.multiselect('選擇管理公司（可不選）', options=all_mgmt)
 df_f = df.loc[df['mgmt_name'].astype(str).isin(selected_mgmt)] if selected_mgmt else df
 
-# Session state.
 for k, v in {
     'p1_box_A': None, 'p1_box_B': None, 'p1_latest_box': None,
     'p2_latest_region': None, 'p2_pending_regions': [], 'p2_applied_regions': [],
@@ -1742,11 +1421,9 @@ if not scatter_tables:
     st.warning('無法建立 Part1 資料。')
     st.stop()
 
-# ================= Part 1 =================
 st.header('Part 1：S&P500 報酬率 × 基金報酬率散點圖')
 st.caption(f'S&P500 benchmark 來源：{benchmark_source}。月資料是一檔基金在一個月的點；1/3/5 年是同一個月結束時的 trailing window 年化報酬。')
 
-# v34 Part1 top controls: same layout concept as v31 screenshot.
 control_cols = st.columns([1.1, 1.5, 2.4, 1])
 with control_cols[0]:
     horizon_display = st.radio(
@@ -1774,7 +1451,6 @@ with control_cols[3]:
                 st.session_state.pop(k, None)
         st.rerun()
 
-# 切換時間窗或模式時，座標系統會改變，所以清掉 Part1~Part3 選區；Part4 記憶不因切換時間窗自動清除。
 p1_context = (period_label, selection_mode, tuple(selected_mgmt))
 if st.session_state.get('p1_selection_context_v34') != p1_context:
     for k in ['p1_box_A','p1_box_B','p1_latest_box','p1_latest_sig','p1_applied',
@@ -1793,10 +1469,7 @@ mask_b = mask_from_box(df_plot, st.session_state.get('p1_box_B'))
 raw_a = df_plot.loc[mask_a].copy() if mask_a.any() else pd.DataFrame(columns=df_plot.columns)
 raw_b = df_plot.loc[mask_b].copy() if mask_b.any() else pd.DataFrame(columns=df_plot.columns)
 compare_mode = selection_mode.startswith('兩選區') and st.session_state.get('p1_box_A') and st.session_state.get('p1_box_B') and not raw_a.empty and not raw_b.empty
-focus = {}
-if not raw_a.empty: focus['A'] = raw_a
-if compare_mode: focus['B'] = raw_b
-fig_p1 = make_part1_scatter_v32(df_plot, focus, period_label, boxes={'A': st.session_state.get('p1_box_A'), 'B': st.session_state.get('p1_box_B') if compare_mode else None}, zoom_to_dense=zoom_dense)
+fig_p1 = make_part1_scatter_v32(df_plot, period_label, boxes={'A': st.session_state.get('p1_box_A'), 'B': st.session_state.get('p1_box_B') if compare_mode else None}, zoom_to_dense=zoom_dense)
 sel_event = st.plotly_chart(fig_p1, on_select='rerun', selection_mode=('box', 'lasso'), width='stretch',
                             config={'displaylogo': False, 'scrollZoom': True, 'modeBarButtonsToAdd': ['select2d', 'lasso2d'], 'modeBarButtonsToRemove': ['hoverClosestCartesian', 'hoverCompareCartesian']}, key=f'p1_scatter_v33_{period_label}_{selection_mode}_{st.session_state.get("p1_chart_nonce", 0)}')
 latest_box = extract_selection_bbox(sel_event)
@@ -1876,7 +1549,6 @@ if not st.session_state.get('p1_applied'):
     st.info('請確認選區後按「套用 Part1 選區」，Part2 才會出現。')
     st.stop()
 
-# ================= Part 2 =================
 st.divider()
 st.header('Part 2：框選樣本的特徵與因子分布')
 st.caption('三個層級會同時顯示：月資料特徵、基金層級因子、基金家族層級特徵。你在任一層級框選後，三個層級都會一起連動變化；單選區與兩選區都相同。')
@@ -1901,7 +1573,6 @@ LEVEL_CONFIGS = {
     '基金家族層級特徵': ['觀測點數', '基金數', '經理人數', '家族平均報酬率', '家族平均超額報酬', '家族平均費用率', '家族平均規模', '家族平均淨申購', '家族累積淨申購', '家族平均換手率', '家族平均管理年資'],
 }
 
-# Prebuild the three tables once per rerun so Part2 does not recalculate them for each block.
 p2_tables_a = {lvl: get_table_for_level(raw_a2, lvl) for lvl in LEVEL_CONFIGS.keys()}
 p2_tables_b = {lvl: (get_table_for_level(raw_b2, lvl) if compare_mode_p2 else pd.DataFrame()) for lvl in LEVEL_CONFIGS.keys()}
 
@@ -1950,8 +1621,6 @@ with p2info:
     latest_txt = '無' if not latest else f"{latest.get('level')} / {latest.get('feature')} {latest.get('x_range')}"
     st.caption(f"最新框選：{latest_txt}；暫存：{len(st.session_state.get('p2_pending_regions', []))} 段；已套用：{len(st.session_state.get('p2_applied_regions', []))} 段。")
 
-# Show all three levels.  Any selection made in one level is converted to raw rows,
-# then projected back to all levels, so all three blocks move together.
 for level_name, default_cols in LEVEL_CONFIGS.items():
     st.subheader(f'Part 2：{level_name}')
     data_a = p2_tables_a[level_name]
@@ -1980,14 +1649,12 @@ if not applied_regions:
     st.info('請在 Part2 任一層級的 histogram 框選區間 → 加入暫存 → 套用，Part3 才會出現。')
     st.stop()
 
-# Apply all selected ranges across monthly/fund/family levels together.
 selected_raw_a = filter_raw_by_regions(raw_a2, None, applied_regions)
 selected_raw_b = filter_raw_by_regions(raw_b2, None, applied_regions) if compare_mode_p2 else pd.DataFrame(columns=raw_b2.columns)
 if selected_raw_a.empty and (not compare_mode_p2 or selected_raw_b.empty):
     st.warning('Part2 已套用的區間沒有對應到資料，請重新框選。')
     st.stop()
 
-# ================= Part 3 =================
 st.divider()
 st.header('Part 3：根據 Part2 篩選後的經理人構成圖')
 count_a = make_manager_count_data(selected_raw_a)
@@ -2026,9 +1693,6 @@ with p3b2:
         if not pending:
             st.warning('Part3 暫存經理人目前是空的。')
         else:
-            # v40 fix:
-            # v39 changed Part2 from one selected level (p2_level) to all three levels shown together,
-            # so p2_level no longer exists here.  Use a stable label/key instead.
             p2_level_label = '全部層級'
             if compare_p3:
                 raw_parts = [
@@ -2071,7 +1735,6 @@ if not st.session_state.get('tab6_part4_manager_records'):
     st.info('請在 Part3 框選經理人並套用到 Part4，Part4 雷達圖才會出現。')
     st.stop()
 
-# ================= Part 4 =================
 st.divider()
 st.header('Part 4：經理人特徵雷達圖（具記憶性 + 向量相似分群）')
 st.caption('Part4 會保留你加入過的經理人，只有按清空才會刪除。雷達圖特徵會被視為向量，並依 cosine similarity 自動把相似經理人放在一起。')
